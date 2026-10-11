@@ -4,8 +4,8 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-export const upstreamCommit = '9b16223e6c5ee8209c25034b24fb790990967b3f';
-export const upstreamClientHash = '1403ab28a1f3478c2a7a11236830f242140e2de7463b7ccb384e469e93bd3ffa';
+export const upstreamCommit = 'b78babc84af441608c7e39fe8b7bc41063d86394';
+export const upstreamClientHash = '0622140dce2dd37d7690d040080ff23e357988f4a5546ce55af0bf3f7ee39a70';
 const project = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 // Host modules are whole-module replacements because the upstream buffered
@@ -126,8 +126,9 @@ function restoreConversationScroll() {
     "            const width = window.innerWidth;\n            const visible = window.visualViewport;\n            const available = Math.max(1, Math.min(height, visible?.height ?? height));\n            root.style.setProperty('--dsha-mobile-visible-vh', `${available}px`);\n            root.style.setProperty('--dsha-mobile-viewport-top', `${visible?.offsetTop ?? 0}px`);\n            if (stableVh === 0");
   replace("        window.addEventListener('resize', syncStableViewport);",
     "        window.addEventListener('resize', syncStableViewport);\n        window.visualViewport?.addEventListener('resize', syncStableViewport);\n        window.visualViewport?.addEventListener('scroll', syncStableViewport);");
-  replace("            window.removeEventListener('resize', syncStableViewport);\n            root.style.removeProperty(exports.STABLE_VIEWPORT_VAR);",
-    "            window.removeEventListener('resize', syncStableViewport);\n            window.visualViewport?.removeEventListener('resize', syncStableViewport);\n            window.visualViewport?.removeEventListener('scroll', syncStableViewport);\n            root.style.removeProperty('--dsha-mobile-visible-vh');\n            root.style.removeProperty('--dsha-mobile-viewport-top');\n            root.style.removeProperty(exports.STABLE_VIEWPORT_VAR);");
+  // 3.0.6 在上游这一处新增了 `stableValue = '';`，锚点跟着上游走；DSHA 的可见视口清理照旧保留。
+  replace("            window.removeEventListener('resize', syncStableViewport);\n            stableValue = '';\n            root.style.removeProperty(exports.STABLE_VIEWPORT_VAR);",
+    "            window.removeEventListener('resize', syncStableViewport);\n            window.visualViewport?.removeEventListener('resize', syncStableViewport);\n            window.visualViewport?.removeEventListener('scroll', syncStableViewport);\n            stableValue = '';\n            root.style.removeProperty('--dsha-mobile-visible-vh');\n            root.style.removeProperty('--dsha-mobile-viewport-top');\n            root.style.removeProperty(exports.STABLE_VIEWPORT_VAR);");
   replace('        // appears, and the keyboard simply covers their lower half. Content that\n        // would fall behind the keyboard gets a keyboard-sized bottom padding on\n        // the scroller (layout.css.ts), which shifts nothing visible.',
     '        // appears. DSHA also caps cards with the current visible viewport: deliberate\n        // keyboard input and same-width split-screen resizing must keep all actions\n        // reachable. No keyboard-padding implementation is assumed here.');
 

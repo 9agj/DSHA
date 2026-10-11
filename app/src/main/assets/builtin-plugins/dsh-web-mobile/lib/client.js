@@ -527,6 +527,70 @@ async function verifySessionDeleted(deps) {
     return !deps.listed();
 }
 };
+__modules["i18n/locales.js"] = function (require, module, exports) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.en = exports.zh = exports.NS = void 0;
+/**
+ * Namespace id for the drawer-control dictionaries.
+ *
+ * Package-prefixed on purpose: the host's `locale.register` THROWS on a
+ * duplicate namespace (no merge, no override), and that throw fails the whole
+ * plugin fiber — a dead web boot on narrow screens. Downstream copies of this
+ * plugin keep our namespace, so a bare, generic name is a loaded gun:
+ * dsh-pocket embeds a copy of the mobile adaptation and still registers
+ * `mobileNav` (issue #165).
+ */
+exports.NS = 'dshWebMobileNav';
+/** Simplified Chinese dictionary (the key-set source of truth). */
+exports.zh = {
+    'open': '打开目录',
+    'close': '收起目录',
+    'backdrop': '点击关闭目录',
+    'backToConversation': '返回会话',
+    'sessionLog': '导出会话日志',
+    'files': '文件浏览',
+    'fileUpload': '添加文件',
+    'fileUploadImage': '上传图片',
+    'fileUploadAttachment': '上传附件',
+    'previewFullscreen': '全屏预览',
+    'previewExitFullscreen': '退出全屏',
+    'deleteSession': '删除会话',
+    'deleteConfirmTitle': '删除会话？',
+    'deleteConfirmDesc': '将删除「{title}」的完整会话记录，此操作不可恢复。',
+    'deleteConfirmYes': '删除',
+    'deleteConfirmNo': '取消',
+    'deletePending': '正在删除…',
+    'deleteErrorBusy': '该会话正在运行且无法停止，请稍后重试。',
+    'deleteErrorNotFound': '会话不存在或已被删除。',
+    'deleteErrorResolve': '无法确定要删除的会话，请重试。',
+    'deleteErrorGeneric': '删除失败：{message}',
+};
+/** English dictionary, key-identical to the Chinese source of truth. */
+exports.en = {
+    'open': 'Open directory',
+    'close': 'Close directory',
+    'backdrop': 'Click to close directory',
+    'backToConversation': 'Back to conversation',
+    'sessionLog': 'Session log',
+    'files': 'Files',
+    'fileUpload': 'Add files',
+    'fileUploadImage': 'Upload image',
+    'fileUploadAttachment': 'Upload attachment',
+    'previewFullscreen': 'Fullscreen preview',
+    'previewExitFullscreen': 'Exit fullscreen',
+    'deleteSession': 'Delete session',
+    'deleteConfirmTitle': 'Delete session?',
+    'deleteConfirmDesc': 'The complete log of “{title}” will be permanently removed. This cannot be undone.',
+    'deleteConfirmYes': 'Delete',
+    'deleteConfirmNo': 'Cancel',
+    'deletePending': 'Deleting…',
+    'deleteErrorBusy': 'This session is running and could not be stopped. Try again later.',
+    'deleteErrorNotFound': 'The session does not exist or was already deleted.',
+    'deleteErrorResolve': 'Could not identify the session to delete. Please try again.',
+    'deleteErrorGeneric': 'Delete failed: {message}',
+};
+};
 __modules["effects/aionui-compat.js"] = function (require, module, exports) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -689,6 +753,7 @@ function createSheetRiseTask() {
 __modules["effects/stats-line.js"] = function (require, module, exports) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.pickTpsReadout = void 0;
 exports.statsAnchorAlive = statsAnchorAlive;
 exports.createStatsLineTask = createStatsLineTask;
 // The official conversation status row (turns / steps / LLM time / TTFT /
@@ -714,6 +779,22 @@ function statsAnchorAlive(el) {
     // marker's own subtree position changed, not its container relationship.
     return el.closest('[class*="_composerStack"]') !== null;
 }
+const pickTpsReadout = (candidates) => {
+    for (const [index, el] of candidates.entries()) {
+        if (!/^TPS\s+\d/.test((el.textContent ?? '').trim()))
+            continue;
+        // The readout is a bare text node holder; a row with children is a wrapper.
+        if (el.children.length > 0)
+            continue;
+        // No parent means the row is mid-teardown — a later candidate may be the
+        // live one (the scan this replaced used to `continue` here too).
+        if (el.parentElement === null)
+            continue;
+        return { index, mark: el.getAttribute('data-mobile-nav') !== 'stats-tps' };
+    }
+    return { index: -1, mark: false };
+};
+exports.pickTpsReadout = pickTpsReadout;
 function createStatsLineTask() {
     // React-owned nodes must never be relocated (issue #104): on unmount React
     // calls parent.removeChild(child) against the parent it rendered the node
@@ -728,7 +809,7 @@ function createStatsLineTask() {
     // The overlay must resolve against a positioned ancestor. The host rarely
     // positions these containers, so mark the expected one (CSS sets
     // position: relative for the marker, without !important so host styles stay
-    // in charge) and let placeOverlay walk to whichever ancestor actually ends
+    // in charge) and let measureOverlay walk to whichever ancestor actually ends
     // up positioned — the math is self-consistent with any container.
     const ensurePositioned = (el, marker) => {
         if (getComputedStyle(el).position === 'static')
@@ -741,13 +822,12 @@ function createStatsLineTask() {
         }
         return null;
     };
-    const placeOverlay = (host, reserve) => {
+    const measureOverlay = (host, reserve) => {
         const container = positionedAncestor(host);
         if (container === null)
-            return;
+            return null;
         const box = reserve.getBoundingClientRect();
         const base = container.getBoundingClientRect();
-        const left = box.left - base.left - container.clientLeft;
         // Center the host on its slot vertically, not top-align it. Measured
         // 2026-09-29 (issue #140 acceptance): the 20px ring top-aligned on its
         // 16px reserve hung its center at y=793 while the neighbouring keys sit
@@ -756,70 +836,92 @@ function createStatsLineTask() {
         // with the cluster. hostRect is read BEFORE the style write below; its
         // height does not depend on top/left, so the math is stable across flushes.
         const hostRect = host.getBoundingClientRect();
-        const top = box.top - base.top - container.clientTop - (hostRect.height - box.height) / 2;
-        const styled = host;
-        if (styled.style.left !== `${left}px`)
-            styled.style.left = `${left}px`;
-        if (styled.style.top !== `${top}px`)
-            styled.style.top = `${top}px`;
+        return {
+            host,
+            left: box.left - base.left - container.clientLeft,
+            top: box.top - base.top - container.clientTop - (hostRect.height - box.height) / 2,
+        };
+    };
+    const writeOverlay = (measured) => {
+        const styled = measured.host;
+        if (styled.style.left !== `${measured.left}px`)
+            styled.style.left = `${measured.left}px`;
+        if (styled.style.top !== `${measured.top}px`)
+            styled.style.top = `${measured.top}px`;
     };
     // The composer root renders the TPS readout ("TPS 89.4 tok/s") as its own
     // row BELOW the status strip; fold it into the strip so every metric sits
     // on one line. Idempotent: the placeholder's text mirrors the readout and
     // the readout itself is overlaid on the placeholder's box.
-    const moveTps = (stats) => {
+    //
+    // Locate half — queries and text only, NO geometry. It runs before the pass
+    // decides whether there is anything to write, so a pass whose key did not
+    // change bails out without reading a single rectangle.
+    const locateTps = (stats) => {
         const stack = stats.closest('[class*="_composerStack"]');
         if (stack === null)
-            return;
+            return null;
         let reserve = stats.querySelector(':scope > [data-mobile-nav="stats-tps-reserve"]');
-        for (const el of stack.querySelectorAll('div')) {
-            const text = (el.textContent ?? '').trim();
-            if (!/^TPS\s+\d/.test(text))
-                continue;
-            if (el.children.length > 0)
-                continue;
-            if (el.getAttribute('data-mobile-nav') === 'stats-tps')
-                continue;
-            if (reserve === null) {
-                reserve = document.createElement('span');
-                reserve.setAttribute('data-mobile-nav', 'stats-tps-reserve');
-                reserve.setAttribute('aria-hidden', 'true');
-                stats.appendChild(reserve);
-            }
-            const live = el.textContent ?? '';
-            if (reserve.textContent !== live)
-                reserve.textContent = live;
-            el.setAttribute('data-mobile-nav', 'stats-tps');
-            const tpsRow = el.parentElement;
-            if (tpsRow === null)
-                continue;
-            ensurePositioned(tpsRow, 'stats-tps-row');
-            placeOverlay(el, reserve);
-            // The strip's last child is the flex shrink group: mirror whatever
-            // width the placeholder settled on so the overlay clips with the same
-            // ellipsis instead of overlapping the neighbouring group.
-            const width = reserve.getBoundingClientRect().width;
-            const styled = el;
-            if (styled.style.maxWidth !== `${width}px`)
-                styled.style.maxWidth = `${width}px`;
-            return;
+        const candidates = [...stack.querySelectorAll('div')];
+        const picked = (0, exports.pickTpsReadout)(candidates);
+        if (picked.index < 0)
+            return null;
+        const el = candidates[picked.index];
+        if (el === undefined)
+            return null;
+        if (reserve === null) {
+            reserve = document.createElement('span');
+            reserve.setAttribute('data-mobile-nav', 'stats-tps-reserve');
+            reserve.setAttribute('aria-hidden', 'true');
+            stats.appendChild(reserve);
         }
+        const live = el.textContent ?? '';
+        if (reserve.textContent !== live)
+            reserve.textContent = live;
+        if (picked.mark)
+            el.setAttribute('data-mobile-nav', 'stats-tps');
+        const tpsRow = el.parentElement;
+        if (tpsRow === null)
+            return null;
+        ensurePositioned(tpsRow, 'stats-tps-row');
+        return { el, reserve, live };
+    };
+    // Measure half — geometry reads only, no style writes, and no queries either:
+    // it works on whatever locateTps already resolved.
+    const measureTps = (located) => {
+        const { el, reserve } = located;
+        const measured = measureOverlay(el, reserve);
+        // The strip's last child is the flex shrink group: mirror whatever width
+        // the placeholder settled on so the overlay clips with the same ellipsis
+        // instead of overlapping the neighbouring group. Measured inside the SAME
+        // read phase as the overlay boxes above — this read used to run after the
+        // left/top write and forced a second synchronous layout.
+        return { el, measured, width: reserve.getBoundingClientRect().width };
+    };
+    // Write half — touches styles only.
+    const writeTps = (fold) => {
+        if (fold.measured !== null)
+            writeOverlay(fold.measured);
+        const styled = fold.el;
+        const maxWidth = `${fold.width}px`;
+        if (styled.style.maxWidth !== maxWidth)
+            styled.style.maxWidth = maxWidth;
     };
     // 2026-09-23（店主最终确认）：**环要、百分比数字不要** —— 环显示在输入框行
     // 的右簇（模型/麦克风旁），CSS 用 font-size:0 只留环、隐掉 "45%" 文本；统计条
     // 拿满整宽。与 moveTps 同款 overlay：环留在 React 渲染的 dock 原位，插件自建
     // 占位 span 顶住右簇槽位（16px 环 + 2px 边距，行 gap 补足余量）。
-    const moveRing = (stats) => {
+    const measureRing = (stats) => {
         const holder = stats.parentElement;
         const dock = holder === null ? null : holder.parentElement;
         if (dock === null)
-            return;
+            return null;
         const ring = [...dock.children].find((child) => !child.contains(stats) && /\d\s*%/.test(child.textContent ?? ''));
         if (ring === undefined)
-            return;
+            return null;
         const row = document.querySelector('[data-composer-card] [class*="_row"] [class*="_trailing"]');
         if (row === null)
-            return;
+            return null;
         let reserve = row.querySelector(':scope > [data-mobile-nav="stats-ring-reserve"]');
         const primary = row.querySelector(':scope > [class*="_primary"]');
         if (reserve === null) {
@@ -836,16 +938,96 @@ function createStatsLineTask() {
             ring.setAttribute('data-mobile-nav', 'stats-ring');
         }
         ensurePositioned(dock, 'stats-ring-dock');
-        placeOverlay(ring, reserve);
+        return { ring, reserve, measured: measureOverlay(ring, reserve) };
+    };
+    // Slow path only (re-anchoring after React rebuilt the marker): measure and
+    // write each fold on its own. The hot fast path in mark() below does not use
+    // these; its own per-pass bound is documented there.
+    //
+    // Do not carry that bound over to the slow path — it does not hold here, and
+    // this used to claim it did. Each wrapper keeps a write→read boundary of its
+    // own: moveTps mirrors the reading into the placeholder before measuring it
+    // (inherent — the slot width cannot be measured until the text is in it), and
+    // measureRing re-inserts the placeholder before measuring when React shuffled
+    // it. relayoutNow() runs both, so it can force two layouts in one pass. Each
+    // wrapper alone forces at most one.
+    const moveTps = (stats) => {
+        const located = locateTps(stats);
+        if (located !== null)
+            writeTps(measureTps(located));
+    };
+    const moveRing = (stats) => {
+        const fold = measureRing(stats);
+        if (fold !== null && fold.measured !== null)
+            writeOverlay(fold.measured);
     };
     let viewportHandler = null;
-    const relayout = () => {
+    // The keyboard animation drives visualViewport.resize once per frame, and the
+    // two folds below read rects and write styles (forced synchronous layout), so
+    // one event per frame meant one overlay pass per frame. Coalesce every event
+    // in a frame into a single pass, and skip the pass entirely when the anchor
+    // box did not move. Measured 2026-10-09 on Android 16 WebView: opening the
+    // drawer went from a 58ms long task to none. A React rebuild that re-creates
+    // the TPS readout at the same box is still re-folded by mark()'s own fast
+    // path, which runs on every tree mutation (scopes: the tree key).
+    let relayoutRaf = 0;
+    let relayoutKey = '';
+    // The ring overlay's visual anchor is its reserve span, and that span lives in
+    // the composer card's trailing lane — NOT in the dock the stats strip sits in.
+    // The lane re-lays out on its own: measured 2026-10-11 on a live host session
+    // (393×844, a running turn), turning the send button into 「Stop generating +
+    // Steer message」 moved the reserve 310px -> 265px while the strip's own box did
+    // not move at all. A skip key built only from the strip box therefore skipped
+    // the pass, the ring kept its stale left/top and painted 45px off its slot —
+    // right on top of the Stop button (report: 「发送键旁边两个蓝色控件叠在一起」).
+    // So the reserve's box is part of both skip keys. The task's own rule is that a
+    // SKIPPED pass runs no query, so the fast path keys off the CACHED reserve
+    // element it folded last time instead of re-querying it: one extra rect read,
+    // still before any write and in the same read phase as the strip's own read, so
+    // it forces no additional layout. A rebuilt or detached reserve reads as a
+    // different box (or 0×0) and therefore forces the re-fold, which is intended.
+    const ringReserveBoxKey = (reserve) => {
+        if (reserve === null)
+            return 'none';
+        const box = reserve.getBoundingClientRect();
+        return `${Math.round(box.left)}:${Math.round(box.top)}:${Math.round(box.width)}`;
+    };
+    const relayoutNow = () => {
         const anchor = document.querySelector('[data-mobile-nav="stats"]');
         if (anchor === null)
             return;
-        moveTps(anchor);
-        moveRing(anchor);
+        const rect = anchor.getBoundingClientRect();
+        // The resize path may run before any mark() fold, so it resolves the ring
+        // reserve by query here; only the fast path is bound by the no-query rule.
+        const key = `${Math.round(rect.left)}:${Math.round(rect.top)}:${Math.round(rect.width)}:${Math.round(rect.height)}|${ringReserveBoxKey(document.querySelector('[data-mobile-nav="stats-ring-reserve"]'))}`;
+        if (key === relayoutKey)
+            return;
+        relayoutKey = key;
+        // Same read-before-write ordering as mark()'s fast path.
+        const located = locateTps(anchor);
+        const tps = located === null ? null : measureTps(located);
+        const ring = measureRing(anchor);
+        if (tps !== null)
+            writeTps(tps);
+        if (ring !== null && ring.measured !== null)
+            writeOverlay(ring.measured);
     };
+    const relayout = () => {
+        if (relayoutRaf !== 0)
+            return;
+        relayoutRaf = requestAnimationFrame(() => {
+            relayoutRaf = 0;
+            relayoutNow();
+        });
+    };
+    // Candidate C state: the key the last completed fold was keyed on, and the
+    // elements it folded. See the fast path in mark() below.
+    let fastKey = '';
+    let foldedTps = null;
+    let foldedTpsReserve = null;
+    let foldedRing = null;
+    let foldedRingReserve = null;
+    const stillFolded = (el, marker) => el !== null && el.isConnected && el.getAttribute('data-mobile-nav') === marker;
     const mark = () => {
         // Keyboard open/close and viewport rotations relayout the composer without
         // any DOM mutation, so the overlays need their own re-layout channel.
@@ -860,8 +1042,52 @@ function createStatsLineTask() {
         // readout is re-folded.
         const anchor = document.querySelector('[data-mobile-nav="stats"]');
         if (anchor !== null && statsAnchorAlive(anchor)) {
-            moveTps(anchor);
-            moveRing(anchor);
+            // Read—write separation (candidate B): every rectangle both folds need is
+            // measured BEFORE either fold writes a style. Interleaving them (write
+            // left/top, then read the placeholder width, then read the ring's boxes)
+            // forced a synchronous layout after each write — three per pass. After the
+            // split the only write still followed by a geometry read is locateTps'
+            // placeholder-text mirror, and that one is inherent: the slot width can
+            // only be measured once the reading is in it (true before #194 too). So a
+            // pass with an unchanged reading forces one layout, a changed reading
+            // forces two — down from three, not to zero.
+            //
+            // Skip-when-unchanged (candidate C): when the anchor box AND the TPS
+            // reading are both unchanged there is nothing to write, so the pass skips
+            // the ring query, every geometry read and every style write. The key is
+            // read before anything is written, so it costs no extra layout. The
+            // remembered fold targets are then re-checked for liveness, because React
+            // replaces these readouts on rebuild: a marker left on a disconnected node
+            // must force a fresh fold, which the unconditional fast path used to
+            // provide for free — dropping that check would leave a rebuilt readout
+            // unfolded on screen.
+            const rect = anchor.getBoundingClientRect();
+            const box = `${Math.round(rect.left)}:${Math.round(rect.top)}:${Math.round(rect.width)}:${Math.round(rect.height)}`;
+            const located = locateTps(anchor);
+            const key = `${box}|${located === null ? 'none' : located.live}|${ringReserveBoxKey(foldedRingReserve)}`;
+            if (key === fastKey &&
+                stillFolded(foldedTps, 'stats-tps') &&
+                stillFolded(foldedTpsReserve, 'stats-tps-reserve') &&
+                stillFolded(foldedRing, 'stats-ring') &&
+                stillFolded(foldedRingReserve, 'stats-ring-reserve')) {
+                return;
+            }
+            fastKey = key;
+            const tps = located === null ? null : measureTps(located);
+            const ring = measureRing(anchor);
+            if (tps !== null)
+                writeTps(tps);
+            if (ring !== null && ring.measured !== null)
+                writeOverlay(ring.measured);
+            foldedTps = located === null ? null : located.el;
+            foldedTpsReserve = located === null ? null : located.reserve;
+            foldedRing = ring === null ? null : ring.ring;
+            foldedRingReserve = ring === null ? null : ring.reserve;
+            // Re-key with the reserve we just folded: the key above was built before the
+            // fold existed, so it could only say 'none' on the first pass — leaving the
+            // next (unchanged) pass to re-fold once for nothing. Re-keying here keeps the
+            // 「unchanged ⇒ skip」 invariant from the very first pass on.
+            fastKey = `${box}|${located === null ? 'none' : located.live}|${ringReserveBoxKey(foldedRingReserve)}`;
             return;
         }
         // Stale marker on a node that left the composer stack/phase context:
@@ -930,6 +1156,11 @@ function createStatsLineTask() {
             // Hand the official layout back: drop every marker (the strip loses its
             // one-line layout, ring/TPS overlays return to static flow) and remove
             // the plugin-owned placeholders.
+            if (relayoutRaf !== 0) {
+                cancelAnimationFrame(relayoutRaf);
+                relayoutRaf = 0;
+            }
+            relayoutKey = '';
             if (viewportHandler !== null) {
                 window.removeEventListener('resize', viewportHandler);
                 window.visualViewport?.removeEventListener('resize', viewportHandler);
@@ -1033,7 +1264,7 @@ const FAB_DRAWER_ICON = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"
     '<path fill-rule="evenodd" clip-rule="evenodd" d="M9.67272 0.522841C10.8339 0.522841 11.76 0.522714 12.4963 0.602493C13.2453 0.683657 13.8789 0.854248 14.4264 1.25197C14.7504 1.48739 15.0355 1.77247 15.2709 2.0965C15.6686 2.64394 15.8392 3.27758 15.9204 4.02655C16.0002 4.7629 16 5.68895 16 6.85014V9.14986C16 10.3111 16.0002 11.2371 15.9204 11.9735C15.8392 12.7224 15.6686 13.3561 15.2709 13.9035C15.0355 14.2275 14.7504 14.5126 14.4264 14.748C13.8789 15.1458 13.2453 15.3163 12.4963 15.3975C11.76 15.4773 10.8339 15.4772 9.67272 15.4772H6.3273C5.16611 15.4772 4.24006 15.4773 3.50371 15.3975C2.75474 15.3163 2.1211 15.1458 1.57366 14.748C1.24963 14.5126 0.964549 14.2275 0.729131 13.9035C0.331407 13.3561 0.160817 12.7224 0.0796529 11.9735C-0.000126137 11.2371 1.25338e-09 10.3111 1.25338e-09 9.14986V6.85014C1.25329e-09 5.68895 -0.000126137 4.7629 0.0796529 4.02655C0.160817 3.27758 0.331407 2.64394 0.729131 2.0965C0.964549 1.77247 1.24963 1.48739 1.57366 1.25197C2.1211 0.854248 2.75474 0.683657 3.50371 0.602493C4.24006 0.522714 5.16611 0.522841 6.3273 0.522841H9.67272ZM5.54303 1.88715V14.1118C5.78636 14.1128 6.04709 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C6.04709 1.88307 5.78636 1.8862 5.54303 1.88715ZM4.1828 1.91166C3.99125 1.9216 3.8148 1.93577 3.65076 1.95353C3.01764 2.02212 2.65034 2.1506 2.37325 2.35179C2.16463 2.50337 1.98052 2.68747 1.82895 2.89609C1.62776 3.17318 1.49928 3.54048 1.43069 4.1736C1.36074 4.81967 1.36023 5.65896 1.36023 6.85014V9.14986C1.36023 10.341 1.36074 11.1803 1.43069 11.8264C1.49928 12.4595 1.62776 12.8268 1.82895 13.1039C1.98052 13.3125 2.16463 13.4966 2.37325 13.6482C2.65034 13.8494 3.01764 13.9779 3.65076 14.0465C4.29683 14.1164 5.13612 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C5.13612 1.88307 4.29683 1.88358 3.65076 1.95353C3.47672 1.97129 3.30027 1.98546 3.10872 1.9954L4.1828 1.91166Z" fill="currentColor"/>' +
     '</svg>';
 /**
- * @param t - `mobileNav` dictionary.
+ * @param t - our dictionary (the `NS` locale namespace, i18n/locales.ts).
  * @param toggleSidebar - opens/closes the drawer.
  * @param panelExit - the sidebar-panel exit face (panel-exit.ts). The FAB is the
  *   screen's only control while a panel owns the main area — the header toggle
@@ -2754,15 +2985,13 @@ const gesture_guard_ts_1 = require("./effects/gesture-guard.js");
 const session_row_fiber_ts_1 = require("./effects/session-row-fiber.js");
 const reconciler_core_ts_1 = require("./core/reconciler-core.js");
 const sessions_compat_ts_1 = require("./core/sessions-compat.js");
+const locales_ts_1 = require("./i18n/locales.js");
 const aionui_compat_ts_1 = require("./effects/aionui-compat.js");
 const stats_line_ts_1 = require("./effects/stats-line.js");
 const preview_fullscreen_ts_1 = require("./effects/preview-fullscreen.js");
 const overlay_backdrop_fab_ts_1 = require("./effects/overlay-backdrop-fab.js");
 const file_viewer_compat_ts_1 = require("./effects/file-viewer-compat.js");
 const sidebar_swipe_ts_1 = require("./effects/sidebar-swipe.js");
-// The custom client bundler cannot resolve `../` requires from src/client/effects,
-// so this mirrors the namespace id from src/client/locales.ts. Keep in sync.
-const NS = 'mobileNav';
 /** Same width bound as the shell's SIDEBAR_AUTO_COLLAPSE (viewport < 1024),
  *  ANDed with a touch-primary pointer guard. Width alone cannot tell a phone
  *  from a desktop window: split views and OS display scaling push a PC's CSS
@@ -3251,6 +3480,16 @@ function installPhoneChrome(ctx) {
         // reachable. No keyboard-padding implementation is assumed here.
         let stableVh = 0;
         let stableWidth = 0;
+        // Writing a custom property on :root invalidates style for the WHOLE
+        // document, so the value is compared before the property is touched: a
+        // width change that leaves the height alone (split-screen resize, a
+        // rotation that lands back on the same height) used to re-run the document
+        // style pass for an identical string. Measured 2026-10-09 on Android 16
+        // WebView: the monotonic rule above already suppresses every keyboard
+        // driven write (the keyboard only lowers the height, and a lower height
+        // never passes the growth test), so no per-frame dedup is needed here —
+        // this guard only removes the redundant identical writes.
+        let stableValue = '';
         const syncStableViewport = () => {
             const height = window.innerHeight;
             const width = window.innerWidth;
@@ -3261,7 +3500,11 @@ function installPhoneChrome(ctx) {
             if (stableVh === 0 || height > stableVh || width !== stableWidth) {
                 stableVh = height;
                 stableWidth = width;
-                root.style.setProperty(exports.STABLE_VIEWPORT_VAR, `${height}px`);
+                const next = `${height}px`;
+                if (next !== stableValue) {
+                    stableValue = next;
+                    root.style.setProperty(exports.STABLE_VIEWPORT_VAR, next);
+                }
             }
         };
         syncStableViewport();
@@ -3272,6 +3515,7 @@ function installPhoneChrome(ctx) {
             window.removeEventListener('resize', syncStableViewport);
             window.visualViewport?.removeEventListener('resize', syncStableViewport);
             window.visualViewport?.removeEventListener('scroll', syncStableViewport);
+            stableValue = '';
             root.style.removeProperty('--dsha-mobile-visible-vh');
             root.style.removeProperty('--dsha-mobile-viewport-top');
             root.style.removeProperty(exports.STABLE_VIEWPORT_VAR);
@@ -3513,7 +3757,9 @@ function installOverlayInteractions(ctx) {
          *  onDrawerPointerUp resolves the row's session id at the lift and needs the
          *  down point to tell a tap from a scroll or a swipe, so every touch
          *  pointerdown records it BEFORE any early return. */
+        let touchStartedAt = 0;
         const onDrawerPointerDown = (event) => {
+            touchStartedAt = performance.now();
             touchDownAt = event.pointerType === 'touch' || event.pointerType === 'pen'
                 ? { x: event.clientX, y: event.clientY }
                 : null;
@@ -3534,6 +3780,26 @@ function installOverlayInteractions(ctx) {
             if (target instanceof Element && target.closest('[data-mobile-nav="backdrop"]') !== null) {
                 if (drawerOpen())
                     toggleSidebar();
+                return;
+            }
+            // DSHA detail=0 follows the host's keyboard/programmatic open path.
+            // Replace the real click, rather than opening on pointerup and allowing
+            // the later native click to select again. dsha-session-open owns closing.
+            const dshaRow = target instanceof Element
+                ? target.closest('[role="treeitem"][data-dsha-session-select]') : null;
+            if (dshaRow !== null && event.detail > 0 && isDrawerNavTarget(target)) {
+                if (event.defaultPrevented || touchDownAt !== null &&
+                    (performance.now() - touchStartedAt >= 500 ||
+                        !(0, session_row_fiber_ts_1.isTapWithinSlop)(touchDownAt, { x: event.clientX, y: event.clientY }, TAP_NAV_SLOP_PX)))
+                    return;
+                event.preventDefault();
+                event.stopPropagation();
+                disarmNav();
+                disarmCloseOnNav();
+                lastTouchNavAt = performance.now();
+                dshaRow.dispatchEvent(new MouseEvent('click', {
+                    bubbles: true, cancelable: true, view: window, detail: 0,
+                }));
                 return;
             }
             // A touch row-tap owns the close (pointerup or the navigation observer);
@@ -3647,7 +3913,7 @@ function registerReconcileTasks(ctx, panelExit) {
     if (reconcileTasksRegistered)
         return () => { };
     reconcileTasksRegistered = true;
-    const t = ctx.locale.bind(NS);
+    const t = ctx.locale.bind(locales_ts_1.NS);
     const removeTasks = [
         addReconcilerTask((0, preview_fullscreen_ts_1.createPreviewFullscreenTask)(t)),
         addReconcilerTask((0, aionui_compat_ts_1.createPreviewCloseTask)()),
@@ -4366,6 +4632,19 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     position: relative !important;
     grid-template-columns: minmax(0, 1fr) 0 0 !important;
     padding-top: env(safe-area-inset-top, 0px) !important;
+    /* Bottom safe area, symmetric with the top inset above. It MUST stay in
+       this rule: box-sizing: border-box is the pair that makes the padding eat
+       into the one-viewport height instead of adding scrollable overflow
+       (pitfalls §safe-area — padding without border-box pushes the composer
+       seat below the fold).
+       Why we have to own it: the third-party @linxin666 sheet (the same one
+       the grid-template-columns note above is about) ships this padding only
+       under (max-width: 768px), and the host ships none at all, so 769-1023px
+       touch devices had no bottom inset from either side and their content sat
+       in the system-bar band (issue #193). In the <=768px band that sheet's
+       declaration and this one are the same property with the same value, so
+       they do not stack. */
+    padding-bottom: env(safe-area-inset-bottom, 0px) !important;
   }
 
   /* The sidebar column (first grid child) becomes a left drawer. The drawer
@@ -4431,16 +4710,33 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
      the remaining 40px showed our own column background as a vertical strip
      along the right edge (measured: content right edge 280, column 320; the
      owner reported a white bar). The inner surface owns that band instead, so
-     the strip is filled by the drawer's real surface colour. */
+     the strip is filled by the drawer's real surface colour.
+     That scenario cannot recur as the layout stands: the column is
+     min(88vw, 280px), never wider than the 280px inner surface, so the
+     inequality that produced the band (column > surface) no longer holds at any
+     viewport width (measured 430/390/340/320 = flush at 280, 300 -> 264,
+     280 -> 246; a narrower column just crops the surface). The only change that
+     would bring it back is raising the column's upper bound past 280px, or the
+     host narrowing the inner surface below it. */
     /* The 40px band is a STACKING result, not a colour one: the drawer's inner
      surface is only 280px wide (host markup), while our column is 320px and
      carries z-index 1300 - so the column's own background paints OVER the
      surface's right 40px. Pixel-verified from a screenshot with the drawer open:
      x=10..270 rgb(249,250,251) (the surface) against x=285..315 rgb(255,255,255)
      (our white column). Repainting the column with the surface's own value makes
-     the seam invisible whatever the theme does; the surface underneath keeps its
-     own colour for the 280px it does cover. */
-    background: var(--dsw-alias-bg-surface, #f9fafb);
+     the seam invisible.
+     The value pinned here is the host's own drawer-fill token - the one
+     .pI_x6G_sidebarCol paints with: --dsw-specific-sidebar-fill, i.e.
+     --dsw-static-neutral-bluish-50 (#f9fafb) in light and
+     --dsw-static-neutral-bluish-900 (#1b1b1c) in dark. Pinning it, rather than
+     letting the host rule paint, keeps the band covered without depending on
+     cascade order. The fallback is deliberately the token's LIGHT value: if the
+     host ever renames this internal token the declaration degrades to today's
+     light behaviour instead of going unset, so it cannot get worse. Do not
+     "simplify" this back to --dsw-alias-bg-surface: that name is defined nowhere
+     in the host, which froze this rule on its fallback and painted the drawer
+     light in the dark theme (issue #192). */
+    background: var(--dsw-specific-sidebar-fill, #f9fafb);
     /* Drawer swipe gestures (edge swipe-in / content swipe-out, see
      docs/specs/2026-08-27-sidebar-swipe-gestures.md).
      One rule is load-bearing for the gesture layer: dropping pan-x on the
@@ -4558,6 +4854,18 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
      so desktop keeps the host layout. */
   [data-sidebar-right-panel="fullscreen"] {
     padding-top: env(safe-area-inset-top, 0px) !important;
+  }
+
+  /* Phone chrome keeps only the collapse control. Split visibility must not
+     depend on data-dockkit-split-blocked: DockLayout measures after each commit,
+     so conditional display can alternate blocked/allowed at the width threshold.
+     Hide the wrapper too, since a blocked split wrapper is a tab stop. */
+  @media (max-width: 767px) and (pointer: coarse) {
+    [data-sidebar-right-panel] [data-dockkit-split-button],
+    [data-sidebar-right-panel] span:has(> [data-dockkit-split-button]),
+    [data-sidebar-right-panel] [data-sidebar-right-mode="push"] {
+      display: none !important;
+    }
   }
 
   /* prefers-reduced-motion: the drawer's .28s slide is motion; drop it
@@ -4945,6 +5253,36 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
      effects/model-menu-anchor.ts centers the panel on the trigger and clamps it to the
      viewport. Do not re-add a CSS rule here without checking the portal parent. */
 
+  /* Phone reasoning-effort list is compact; the model catalog and the tablet stay
+     host-sized. Measured on the real host bundle (dsh-client-ui-model-selection
+     0.2.0-rc.2, 393x844, phone emulation): the effort pane renders 248px wide
+     (its own min-width is 240px) while its four levels need far less.
+     The two panes differ in the SHAPE of their radio list, and that difference is
+     the only reliable discriminator (measured, same run):
+       effort pane   DIV._surface_ri079_1._7KE1Ra_menu[role=menu]
+                       > DIV._material_ri079_21
+                       > button._7KE1Ra_option[role=menuitemradio]   <- DIRECT child
+       model pane    DIV._surface_ri079_1._7KE1Ra_menu[role=group]
+                       > DIV._material_ri079_21
+                       > DIV._7KE1Ra_groups.scrollable[role=menu]
+                           > SECTION._group_121p8_1[role=group] > button[role=menuitemradio]
+     The host sets 「role: pane === "model" ? "group" : "menu"」, so the effort pane is
+     the role=menu shell and its radios ARE direct children, while the catalog's sit
+     two levels deeper. Requiring both halves — role=menu AND a direct-child radio —
+     therefore selects the effort list and leaves the catalog at its host size.
+     Neither half is safe alone: dropping the role also matches the catalog's inner
+     _groups container, and matching radios as descendants selects the catalog shell.
+     (Measured with each variant: the group/descendant form hit the catalog only.)
+     「min-width: 0 !important」 is load-bearing: without it the host's own
+     min-width 240px keeps the pane at 240 no matter what width is set. */
+  @media (max-width: 767px) and (pointer: coarse) {
+    [class*="_7KE1Ra_menu"][role="menu"]:has(> [role="menuitemradio"]) {
+      width: min(208px, calc(100vw - 32px)) !important;
+      min-width: 0 !important;
+      max-width: calc(100vw - 32px) !important;
+    }
+  }
+
   /* --- Fix composer row overflow at narrow widths (320px-360px) ---
      Force every direct child of the tools and trailing lanes to shrink,
      so they can fit within the available space without causing horizontal
@@ -5066,6 +5404,24 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     margin-left: auto;
   }
   [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > [class*="_trailing"]:has([class*="_trigger"][aria-haspopup="menu"], > [class*="_root"] > [class*="_trigger"][aria-haspopup="dialog"]) > [class*="_primary"] {
+    margin-left: 0;
+  }
+  /* Issue #191 — the subagent running form (stop + send, both _primary) has
+     NEITHER of the zeroing rule's two gates: ModelSelect renders nothing in an
+     addressed subagent session (no aria-haspopup="menu" in the lane) and the
+     meter lives in the card's dock row since rc.2 (no _root > dialog trigger
+     in the lane either). Both primaries therefore keep the auto margin from the
+     rule above, and flex SPLITS the free space between the two auto margins —
+     the stop key lands mid-lane with a void on both sides of it.
+     Same recipe as the model-present case (:707-712): zero every auto so no
+     element competes for the slack, and let justify-content pin the whole
+     cluster right. Zeroing alone would hug the LEFT edge instead, so both
+     halves are required. Scoped to the dual-primary form, so the main
+     session's single-primary path keeps its auto untouched. */
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]):has([class*="_primary"] ~ [class*="_primary"]) > [class*="_trailing"] {
+    justify-content: flex-end;
+  }
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]):has([class*="_primary"] ~ [class*="_primary"]) > [class*="_trailing"] > [class*="_primary"] {
     margin-left: 0;
   }
 
@@ -5306,6 +5662,20 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
   [data-composer-card] [role="button"],
   [data-composer-card] [tabindex] {
     -webkit-tap-highlight-color: transparent;
+  }
+
+  /* 深色下顶栏与页面底色的断层（issue #176「减轻顶部纯黑区域与网页头部的突兀色差」/
+     2026-10-11 真机反馈：手机上头部呈灰黑一块，跟上面那行系统时间栏分得太开）。
+     实测（393×844，真实会话，深色）：page/body 与 frame 都是 #151517（--dsw-alias-bg-base），
+     而宿主会话头部自带层色 #232324，头部上方还夹着一条跟随页面底色的安全区带
+     ⇒ 「深色带 → 较亮头部 → 深色内容」三段断层。
+     处理：手机档（本块在移动媒体查询内）把头部底色并到页面底色，层次改由分隔线与内容承担；
+     浅色档宿主两头同为白、本来就没有断层，不参与；桌面档不碰。
+     宿主深色标记挂在 body 上（实测设 body[data-ds-dark-theme] 即切到 #151517），
+     html 上若也挂同一个标记一并覆盖。 */
+  body[data-ds-dark-theme] [data-mobile-nav="frame"] [data-phase] header,
+  html[data-ds-dark-theme] [data-mobile-nav="frame"] [data-phase] header {
+    background-color: var(--dsw-alias-bg-base, #151517) !important;
   }
   /* 头部 UI 的按下反馈（店主 2026-09-23："是头部 UI，没有触发反馈"）。
      取证：头部四个宿主包 :active 全为 0，反馈只挂 :hover。
@@ -5921,6 +6291,44 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
        toggle 8,6 28x28；真机 DOM 规则枚举确认胜出者就是本块）。
        NOTE: 本文件整体是 JS 模板字符串，注释里绝不能出现反引号。 */
     padding: 0 !important;
+    padding-left: 32px !important;
+  }
+  /* --- 0.2.0-rc.x：header 变 grid，座位从 titleRow 内部搬到了 header 自己的第一列 ---
+     上面两条把「面板开关的 32px 座位」记在座位自己身上（padding-left）。在
+     0.1.6-alpha.2 里 headerLeading 是 titleRow 的第一个孩子，这个 padding 就是
+     titleRow 内容盒的起点，标题的 40px 落点是它直接算出来的。0.2.0-rc.x 把 header
+     改成 grid-template-columns: auto minmax(0,1fr)：座位成了 header 的直接孩子
+     （grid-area: 1/1），titleRow 独占第二列（grid-column: 2），于是标题的 40px 落点
+     变成「网格第一列恰好 32px」的副作用——座位一旦被谁塌掉（padding 被覆盖、宽度被
+     第三方归零、display 被藏），第一列就回到 0px，标题立刻压到 left:8 的圆形开关上。
+     2026-09-22 在 0.1.6 上实测过同一个失败面（座位被 padding 简写清零 → 第一列 0px
+     → crumbs x=8、toggle 8,6 28x28），当时靠把 padding-left 补回来止住；这一代改成
+     把座位记在标题行自己身上：padding-left 加在 titleRow 上（border-box，不撑破第二
+     列），座位格归零，标题落点不再依赖座位格存在、也不依赖它的宽度算得对不对。
+     判别式是「座位是不是 header 的直接孩子」——0.1.6 及更早座位在 titleRow 内部，
+     整块不命中，老规则原样管老宿主。
+     附带修掉一条静默漂移：老规则「header > :first-child > :last-child { display:none }」
+     在 0.1.5 藏的是会话日志胶囊；0.2.0 里 header 的第一格是座位，它最后一个孩子是
+     conversation.header.leading 槽的包装元素，整条规则于是变成「藏掉整个 leading 槽」
+     （实测：往槽里注入 28x28 按钮，计算盒 0x0）。手机档这一格是插件自己的抽屉开关
+     （绝对定位 left:8），槽里的控件必然和它叠在一起，所以「藏」的结果是对的、理由
+     一直没写下来；这里按槽名显式藏，别再靠 :last-child 误伤。
+     NOTE: 本文件整体是 JS 模板字符串，注释里绝不能出现反引号。 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]):has(> [data-conversation-header-leading]) > [data-conversation-header-leading] {
+    width: auto !important;
+    min-width: 0 !important;
+    padding: 0 !important;
+    gap: 0 !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]):has(> [data-conversation-header-leading]) [data-slot="conversation.header.leading"] {
+    display: none !important;
+  }
+  /* 这里用 [class*="_titleRow"] 后缀形而不是邻近两条的 [class*="wSkVaW_titleRow"]：
+     全包只有 wSkVaW_titleRow 含这个片段（无前缀重叠，且已被 header:has 门控），
+     后缀形对哈希前缀改名免疫——座位记错地方的代价是标题静默压回开关上，不值得
+     为风格统一冒这个险。 */
+  [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]):has(> [data-conversation-header-leading]) [class*="_titleRow"] {
+    box-sizing: border-box !important;
     padding-left: 32px !important;
   }
   /* 0.1.6 的新头部里，titleRow 的第一个孩子是新增的空座位
@@ -6556,14 +6964,22 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     border-radius: 14px !important;
     animation: dsh-web-mobile-sheet-in .22s var(--ds-ease-out, ease-in-out);
   }
-  /* The settings sheet's dimmed mask fades in with the panel (the mask is
-     the first child of the overlay that directly contains the sheet). */
-  :has(> [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"])) > :first-child {
+  /* The settings sheet's dimmed mask fades in with the panel: the mask is the
+     overlay's first child, so it is reached as a direct child of the overlay
+     that holds the settings panel. The panel is identified by its stable
+     data-shortcut-modal="settings" marker (host value; the shortcut editor uses
+     "shortcut-edit" instead, so this cannot reach that family) plus
+     role/aria-modal. Keep the outer :has() ATTRIBUTE-ONLY: an earlier form
+     tested the panel's shape by nesting a :has() inside this one, which is an
+     invalid selector — Chromium dropped the entire rule without a word and the
+     fade never ran once (issue: settings mask, found 2026-09-27 and 2026-10-10).
+     scripts/css-structure-check.mjs now fails the build on nested :has(). */
+  :has(> [aria-modal="true"][data-shortcut-modal="settings"]) > [class*="_mask"] {
     animation: dsh-web-mobile-fade .18s var(--ds-ease-out, ease-in-out);
   }
   @media (prefers-reduced-motion: reduce) {
     [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"]),
-    :has(> [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"])) > :first-child {
+    :has(> [aria-modal="true"][data-shortcut-modal="settings"]) > [class*="_mask"] {
       animation: none !important;
     }
   }
@@ -7018,6 +7434,23 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     content-visibility: auto;
     contain-intrinsic-size: auto 320px;
   }
+  /* ---------- 文档预览的代码行：屏外行跳过布局/绘制（2026-10-09 实测） ----------
+     报障场景：打开一份 13.4k 行文件的文档预览（DOM 23,662 节点）后整页卡死。
+     真机读数（Android 16 WebView）：单帧最差 269 / 310 / 395 / 485 / 530ms，
+     rAF 帧率掉到 2 / 5 / 17，长任务每秒合计最高 1031ms；加上下面这条规则后
+     最长帧 33ms、帧率 88–119、长任务归零，只剩首次挂载建 React 元素的那几帧。
+     代码行行高统一（约 20px），所以 contain-intrinsic-size 的估值精确，滚回很久
+     以前的历史也不会跳滚动条 —— 这正是它与上面那条消息块规则（高度差异大、
+     兜底给 320px）分开写的原因。
+     选择器保持窄：只在移动 frame 内，且必须落在宿主文档预览模块自己的代码行
+     容器里（dsh-client-ui-sidebar-documentpreview 的 TextPreview：_textDocument
+     容器中的 _line 行）。同模块的 _preview 是更泛的词根，chat / conversation /
+     deliverables 等别的宿主模块也有这个名字，纳入会越界改到那些面板，所以不收。
+     这一条只省布局与绘制，不省 React 挂载的 JS，「切换会话」的卡顿不在它的射程内。 */
+  [data-mobile-nav="frame"] [class*="_textDocument"] [class*="_line"] {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 20px;
+  }
   @media (prefers-reduced-motion: reduce) {
     [data-mobile-nav="frame"]:has([class*="panelRow"][aria-current="page"]) [class*="_centerCol"] > * > *,
     [data-mobile-nav="panel-ghost"],
@@ -7114,6 +7547,19 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
      （searchResultRow）不受影响。 */
   [data-mobile-nav="frame"] [class*="sessionRow"] [class*="_rowActions"] {
     display: inline-flex !important;
+  }
+  /* ---------- 归档 / 置顶快捷按钮在手机档收进 ⋯ 菜单（issue #154） ----------
+     宿主把两颗快捷按钮注册进「sidebar.workspaces.session.row.action」槽位
+     （archive order 100 / pin order 200）；_rowActions 一常显，抽屉里每一行
+     就多两颗图标、行尾发挤，而手机用户多数并不需要这两个入口。四个动作
+     （归档 / 取消归档 / 置顶 / 取消置顶）在 ⋯ 菜单里都有，所以按宿主自己的
+     aria-label 精确匹配隐藏它们——⋯ 锚点的 label 含会话标题（「会话“X”的
+     操作」/「Session actions for X」），精确匹配不会误撞。宿主字典目前只有
+     zh/en 两套（2026-10-10 核对 0.2.0-rc.2 产物），换到别的语言时本规则静默
+     失效：按钮照常显示，不会隐藏错东西；第三方注册进同一槽位的快捷按钮也
+     不动。 */
+  [data-mobile-nav="frame"] [class*="sessionRow"] [class*="_rowActions"] :is([aria-label="归档会话"], [aria-label="取消归档"], [aria-label="置顶会话"], [aria-label="取消置顶"], [aria-label="Archive session"], [aria-label="Unarchive session"], [aria-label="Pin session"], [aria-label="Unpin session"]) {
+    display: none !important;
   }
 
   /* ---------- 提问卡（ask-user）头部按钮热区（issue #140） ----------
@@ -7647,6 +8093,71 @@ exports.COMPAT_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
      segmented look (the official borders differ per state). */
   [aria-modal="true"] [class*="_cubeRow"] > * {
     border: 1px solid var(--dsw-alias-border-l1, rgba(0, 0, 0, .12)) !important;
+  }
+
+  /* ---------- dsh-model-capabilities: model row must not crush its name ----------
+     On the Models page each catalog model is a flex row:
+     [model id] [display name] [chips] [chevron]. A chip can be long — the
+     reasoning summary prints the whole level list
+     ("reasoning: minimal/low/medium/high/xhigh/max", measured 322px at
+     min-content) — and the chips wrapper inherits the flex default
+     min-width: auto, so it grows past the row and squeezes the model id to
+     its minimum content width. With overflow-wrap: anywhere on the id, the
+     text then breaks one character per line: owner report 2026-10-05,
+     "gpt-6.1-sol" rendering as a 8x270px vertical sliver at 393px (a 223px
+     chip against a 259px row).
+
+     Upstream already declares flex-wrap: wrap on the wrapper — it is MEANT
+     to move to another line — but a single chip alone exceeds the row, so
+     wrapping never triggers. Let the row itself wrap and give the chips a
+     full-width line of their own; the chips then wrap chip-by-chip inside
+     it and every chip keeps a readable width.
+
+     Measured at 393px (id width x height): none 8x270 vertical ->
+     this rule keeps the id one line (72x15 on the widest case) and every
+     chip intact.
+
+     Two things this rule set has to get right beyond the id:
+     - the chips take a FULL line (flex: 1 0 100%) and must therefore be sent
+       after the id/name with order:1; without it the chevron, which is the
+       row's last child, is pushed onto a line of its own at the far LEFT
+       (measured: chevron 237px from the right edge = flush left, the orphaned
+       arrow the first cut of this rule produced).
+     - the chevron then needs margin-left:auto to stay flush right on the
+       first line (measured 10px from the edge on every row).
+     Rejected alternatives: min-width:0 + flex:1 1 auto on the wrapper alone
+     still left the id crushed at 44x60 vertical; white-space:nowrap on the id
+     kept it unreadably narrow at 44px; truncating the over-long chip
+     (white-space:nowrap + ellipsis on the chip) hid the reasoning summary
+     entirely - the user needs to see which levels a model offers.
+     Scoped to the settings dialog and the plugin's own class prefix; the
+     whole file is mobile-gated, so desktop never sees it. */
+  [aria-modal="true"] [class*="Qzh-QG_rowHeader"] {
+    flex-wrap: wrap !important;
+  }
+  [aria-modal="true"] [class*="Qzh-QG_chips"] {
+    order: 1 !important;
+    flex: 1 0 100% !important;
+    min-width: 0 !important;
+    justify-content: flex-start !important;
+  }
+  /* NOTE the :not() guard below: [class*="..._chip"] is a SUBSTRING match and
+     also hits the wrapper ("..._chips" contains "..._chip"), which would put
+     max-width/overflow-wrap on the container too. Exclude the wrapper by its
+     own overlapping prefix, the way this file's other _stat / _header families
+     do (pitfall: 哈希子串). */
+  [aria-modal="true"] [class*="Qzh-QG_chip"]:not([class*="Qzh-QG_chips"]) {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+  [aria-modal="true"] [class*="Qzh-QG_modelId"] {
+    min-width: 0 !important;
+  }
+  [aria-modal="true"] [class*="Qzh-QG_modelName"] {
+    min-width: 0 !important;
+  }
+  [aria-modal="true"] [class*="Qzh-QG_rowHeader"] > svg {
+    margin-left: auto !important;
   }
 
   /* ---------- dsh-web-ui polish: explorer sheet ----------
@@ -8512,6 +9023,56 @@ exports.MISC_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
     transition: transform .12s !important;
   }
 
+  /* ---------- mattskills status capsule: keep its tail (skills button / fold
+      chevron) inside the pill on portrait ----------
+      dsh-mattpocock-skills-deck renders a capsule status bar in
+      conversation.input.dock (order 40, the row above the composer card). Its
+      own sheet deliberately never shrinks icons or counters ("图标与普通计数
+      永不收缩"), so as soon as the capsule's content is wider than the pill the
+      host wrapper's overflow:hidden cuts the right edge and the two segments
+      that sit last — the skills-list button (2×2 grid) and the fold chevron
+      that collapses the whole deck strip — are not painted at all.
+      Measured 2026-10-10 on a 393px portrait viewport, session bound to a
+      ticket with two-digit counters (可接 21 / 诊断 20): capsule content
+      ≈ 415px against a ~360px pill, i.e. ~55px short — exactly those two
+      segments; the same session on landscape shows both, so this is width
+      pressure, not a missing feature (and not a deck version difference:
+      1.7.51 / 1.8.0-rc.1 / 1.8.0-rc.2 all render both unconditionally).
+      Reclaim the width from the capsule's desktop-sized spacing (6px column
+      gap plus 7px padding on each of ~11 children) rather than hiding any
+      segment, and keep a horizontal scroll as the fallback for the narrowest
+      phones so the tail can still be swiped into view. The scrollbar stays
+      hidden, so the pill still reads as one pill. Desktop untouched: this
+      block lives inside the max-width: 1023px media query. */
+  [data-slot="conversation.input.dock"] .dsws-capsule {
+    gap: 1px 3px !important;
+    padding: 3px 4px !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    scrollbar-width: none !important;
+  }
+  [data-slot="conversation.input.dock"] .dsws-capsule::-webkit-scrollbar {
+    display: none !important;
+  }
+  [data-slot="conversation.input.dock"] .dsws-capsule .dsws-capsule-word {
+    padding: 2px 4px !important;
+    column-gap: 3px !important;
+  }
+  [data-slot="conversation.input.dock"] .dsws-capsule .dsws-seg {
+    padding: 2px 4px !important;
+    gap: 3px !important;
+  }
+  [data-slot="conversation.input.dock"] .dsws-capsule .dsws-split .dsws-split-part {
+    padding: 2px 4px !important;
+  }
+  [data-slot="conversation.input.dock"] .dsws-capsule .dsws-timebtn {
+    padding: 2px 4px !important;
+  }
+  [data-slot="conversation.input.dock"] .dsws-capsule .dsws-skillbtn,
+  [data-slot="conversation.input.dock"] .dsws-capsule .dsws-fold-toggle {
+    padding: 1px 2px !important;
+  }
+
   /* ---------- ask question composer (ask_user_question): kill iOS Safari
       input-focus auto-zoom ----------
       Safari on iPhone enlarges the whole viewport when a focused <input> /
@@ -8789,10 +9350,9 @@ const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
  *    other. On touch devices every tap makes the browser synthesize paired
  *    mouseenter/mouseleave from its tracked mouse position, which usually
  *    differs from the tap point: taps did nothing, or the card popped back
- *    open ~200 ms after an outside close (the “点了没反应 / 自弹回” era,
- *    hash ZKlsPq).
+ *    open ~200 ms after an outside close (the “点了没反应 / 自弹回” era).
  *
- * 2. 0.1.0-rc.6 (hash h8S2Va) removed the hover timers and gave the trigger
+ * 2. A later host removed the hover timers and gave the trigger
  *    a native `onClick: () => changeOpen(!open)`. A phone tap now crosses
  *    TWO toggle sources: the browser fires pointerup first (this shim
  *    dispatches the synthetic ArrowDown there, capture phase — BEFORE the
@@ -8822,9 +9382,10 @@ const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
 /** Count-variant trigger only: the switcher variant has its own onClick. */
 const CHIP_TRIGGER_SELECTOR = '[data-mobile-nav="frame"] button[class*="_trigger"][aria-haspopup="tree"][aria-expanded]:not([class*="_switcherTrigger"])';
 /**
- * Lineage root plus its menu. NOTE: `ZKlsPq` (hover-only era) and `h8S2Va`
- * (0.1.0-rc.6) are the dsh-client-ui-subagent CSS-module hashes — audit
- * these selectors when the package upgrades.
+ * Lineage root plus its menu. Defensive dual hash: ZKlsPq is present in
+ * the current host; h8S2Va is retained as a historical fallback.
+ * Hash presence does not identify the hover/click interaction era.
+ * Audit these selectors when the host package upgrades.
  */
 const HOVER_SUBTREE_SELECTOR = '[class*="ZKlsPq_root"], [class*="ZKlsPq_menu"], [class*="h8S2Va_root"], [class*="h8S2Va_menu"]';
 /** How long after touch activity synthesized hover events stay suppressed. */
@@ -8936,10 +9497,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.installSessionMenuDelete = installSessionMenuDelete;
 const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
 const sessions_compat_ts_1 = require("./core/sessions-compat.js");
+const locales_ts_1 = require("./i18n/locales.js");
 const session_row_fiber_ts_1 = require("./effects/session-row-fiber.js");
-// Mirrored from src/client/locales.ts: the custom client bundler cannot
-// resolve `../` requires from effects/. Keep in sync.
-const NS = 'mobileNav';
 /** The ui-workspace dictionary namespace the host session menu labels come from. */
 const WORKSPACE_NS = 'workspace';
 /** Marker on the injected menu item (idempotence across React re-renders). */
@@ -8968,7 +9527,7 @@ function escapeHtml(value) {
  */
 function installSessionMenuDelete(ctx) {
     (0, phone_chrome_ts_1.installMobileEffect)(ctx, 'dsh-web-mobile: session-menu delete', () => {
-        const navT = ctx.locale.bind(NS);
+        const navT = ctx.locale.bind(locales_ts_1.NS);
         // Host workspace-browser dictionary for menu-signature detection. Bound
         // lazily so a later-registered dictionary is picked up; the general
         // overload accepts the raw namespace id.
@@ -10091,10 +10650,8 @@ const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
  * 本插件早先用 CSS 居中过它，但菜单 portal 到 body 之后那条 `_root > _menu` 子代链断掉，
  * 规则成了**死规则**。CSS 够不到 portal 节点，所以在这里用 JS 重锚。
  *
- * 落位（三轮定稿，2026-09-23）：**菜单在输入框里水平居中** —— 菜单中心 = 输入框中心。
- * 真机：卡片中心 179、菜单宽 246 ⇒ left 56（即 56..302，左右各留约 40px）。
- * 历史对照：宿主原样 12..258（偏左）／居中于触发器 106..352（触发器在右半边 ⇒ 偏右）。
- * 拿不到卡片时退回「居中于触发器 + 视口 GUTTER」。只认模型菜单的哈希锚点，其它菜单不碰。
+ * 落位：菜单能完整放入视口时右缘贴触发器；窄屏越界或触发器不可用时，
+ * 回退为输入框内居中。两种锚点都不可用时保持宿主位置。其它菜单不碰。
  *
  * ## 成本（2026-09-23 优化，店主批准）
  *
@@ -10105,8 +10662,8 @@ const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
  *
  * 现在分两条路径：
  *   · `refresh()` —— **唯一的查询入口**，只在"可能开关菜单"的交互后跑（点到/聚焦/按键在
- *     触发器或菜单上）。查到就把节点记进 `active`。
- *   · `follow()` —— 滚动/改变尺寸只对 `active` 重算位置（读两个 rect，约 0.02ms），
+ *     触发器或菜单上）。查到后缓存菜单、触发器和输入框。
+ *   · `follow()` —— 滚动/改变尺寸只对缓存节点重算位置，
  *     `active === null` 时**直接返回、零查询**。
  *
  * 为什么不能干脆删掉 scroll 监听：实测滚动时输入框卡片会移动（同会话内 365 → 648），
@@ -10130,6 +10687,8 @@ function installModelMenuAnchor(ctx) {
         const timers = [];
         /** 已确认「开着」的菜单节点；null 表示当前没有菜单（滚动路径据此零查询）。 */
         let active = null;
+        let activeTrigger = null;
+        let activeCard = null;
         /**
          * 我们最后写进 inline left 的节点与值。卸载/菜单消失时要把这行还回去 ——
          * 否则宿主之后再渲染同一个菜单会带着我们留下的位置（issue #86）。
@@ -10150,7 +10709,7 @@ function installModelMenuAnchor(ctx) {
             }
             return null;
         };
-        /** 把菜单水平居中在输入框里（拿不到卡片则居中于触发器）。只写 inline left。 */
+        /** Align to the trigger's right edge when it fits; otherwise center on the card. */
         const place = (menu) => {
             const menuBox = laidOut(menu);
             if (menuBox === null)
@@ -10158,18 +10717,17 @@ function installModelMenuAnchor(ctx) {
             const width = menuBox.width;
             const viewport = document.documentElement.clientWidth;
             const max = Math.max(GUTTER, viewport - width - GUTTER);
-            const card = document.querySelector(COMPOSER_CARD);
-            const cardBox = card === null ? null : card.getBoundingClientRect();
-            const trigger = cardBox !== null && cardBox.width > 0 ? null : document.querySelector(MODEL_TRIGGER);
-            const triggerBox = trigger === null ? null : trigger.getBoundingClientRect();
-            const center = cardBox !== null && cardBox.width > 0
-                ? cardBox.left + cardBox.width / 2
-                : triggerBox === null ? null : triggerBox.left + triggerBox.width / 2;
-            if (center === null)
+            const triggerBox = laidOut(activeTrigger);
+            const cardBox = laidOut(activeCard);
+            const flush = triggerBox === null ? null : triggerBox.right - width;
+            let left;
+            if (flush !== null && flush >= GUTTER && flush <= max)
+                left = flush;
+            else if (cardBox !== null)
+                left = cardBox.left + (cardBox.width - width) / 2;
+            else
                 return;
-            const left = Math.min(Math.max(center - width / 2, GUTTER), max);
-            const next = `${Math.round(left)}px`;
-            // 只在真的不同时才写：避免和宿主来回抢同一帧。
+            const next = `${Math.round(Math.min(Math.max(left, GUTTER), max))}px`;
             if (menu.style.left !== next)
                 menu.style.left = next;
             placedLeft = { el: menu, value: next };
@@ -10177,6 +10735,8 @@ function installModelMenuAnchor(ctx) {
         /** 交互路径：刷新缓存（会查询）并按新位置落位。 */
         const refresh = () => {
             active = findMenu();
+            activeTrigger = active === null ? null : document.querySelector(MODEL_TRIGGER);
+            activeCard = active === null ? null : document.querySelector(COMPOSER_CARD);
             if (active !== null)
                 place(active);
         };
@@ -10186,6 +10746,8 @@ function installModelMenuAnchor(ctx) {
                 return;
             if (laidOut(active) === null) {
                 active = null;
+                activeTrigger = null;
+                activeCard = null;
                 return;
             }
             place(active);
@@ -10261,6 +10823,8 @@ function installModelMenuAnchor(ctx) {
                 placedLeft.el.style.left = '';
             placedLeft = null;
             active = null;
+            activeTrigger = null;
+            activeCard = null;
         };
     });
 }
@@ -11038,6 +11602,7 @@ exports.classifyBridgeResult = classifyBridgeResult;
 exports.handFilesToHost = handFilesToHost;
 exports.openAttachmentPicker = openAttachmentPicker;
 exports.installComposerFilePicker = installComposerFilePicker;
+const locales_ts_1 = require("./i18n/locales.js");
 const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
 /**
  * 手机档：输入框回形针 → 「上传图片 / 上传附件」两选弹层。
@@ -11078,8 +11643,6 @@ const TRIGGER_SELECTOR = '[data-mobile-nav="file-upload"]';
 const CARD_SELECTOR = '[data-composer-card]';
 /** 宿主真正接收文件的 input —— 插件不另起 intake。 */
 const HOST_INPUT_SELECTOR = 'input[type=file]';
-/** mobileNav 命名空间（同 src/client/i18n/locales.ts 的 NS）。 */
-const NS = 'mobileNav';
 /**
  * 当前打开着的那张浮层的 close（一次只会有一张）。
  *
@@ -11214,7 +11777,7 @@ function openHostPicker(kind) {
  *
  * 回落链：桥不存在 → 直接 `openHostPicker('file')`；桥抛错 / 返回脏数据 / 注入失败 →
  * 也回落（那时候 App 侧若已合入 #101，宿主 input 自己就会弹 chooser）。
- * @param t - mobileNav 文案。
+ * @param t - 插件 `NS` 命名空间文案。
  */
 async function openAttachmentPicker(t) {
     const bridge = window.DSHA;
@@ -11248,7 +11811,7 @@ async function openAttachmentPicker(t) {
  * 位置**每次视口变化都重算**（软键盘收起会整体下移一个键盘高，算一次的浮层会
  * 停在会话中部 —— 2026-10-07 真机报障）。
  * 无「取消」行：点浮层外或按返回键关闭（浮层外的透明遮罩只负责收点击）。
- * @param t - mobileNav 文案。
+ * @param t - 插件 `NS` 命名空间文案。
  * @param trigger - 被点的回形针入口（定位锚点）。
  */
 function openSheet(t, trigger) {
@@ -11388,7 +11951,7 @@ function openSheet(t, trigger) {
  */
 function installComposerFilePicker(ctx) {
     (0, phone_chrome_ts_1.installMobileEffect)(ctx, 'dsh-web-mobile: composer file picker', () => {
-        const t = ctx.locale.bind(NS);
+        const t = ctx.locale.bind(locales_ts_1.NS);
         const onClick = (event) => {
             const target = event.target;
             if (!(target instanceof Element))
@@ -11666,8 +12229,8 @@ const attachment_mention_core_ts_1 = require("./core/attachment-mention-core.js"
  *   the insert `appearance` (chip glyphs: 'session' | 'file' | 'folder' only —
  *   there is no image glyph, so images use 'file').
  */
-/** Own locale namespace (locales.ts stays untouched; same NS/zh/en shape as ui-reference). */
-exports.ATTACHMENT_NS = 'mobileNav.attachments';
+/** Own locale namespace, package-prefixed (locales.ts stays untouched; same NS/zh/en shape as ui-reference). */
+exports.ATTACHMENT_NS = 'dshWebMobileNav.attachments';
 exports.ATTACHMENT_ZH = {
     'section': '本次附件',
     'kind.file': '文件',
@@ -11789,11 +12352,11 @@ __modules["components/file-share-locale.js"] = function (require, module, export
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.fileShareEn = exports.fileShareZh = exports.FILE_SHARE_NS = void 0;
 /**
- * `mobileNavFileShare` namespace: file-share copy, registered by
+ * `dshWebMobileNavFileShare` namespace: file-share copy, registered by
  * installFileShare (effects/file-share.ts) through ctx.locale.register — kept
  * out of i18n/locales.ts so the feature owns its dictionary end to end.
  */
-exports.FILE_SHARE_NS = 'mobileNavFileShare';
+exports.FILE_SHARE_NS = 'dshWebMobileNavFileShare';
 /** Simplified Chinese dictionary (the key-set source of truth). */
 exports.fileShareZh = {
     'share': '分享',
@@ -12759,6 +13322,8 @@ function createRafScheduler(raf, caf) {
 __modules["debug.js"] = function (require, module, exports) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.parseBundleRev = parseBundleRev;
+exports.readBundleRev = readBundleRev;
 exports.installDebugBadge = installDebugBadge;
 const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
 /**
@@ -12767,6 +13332,49 @@ const phone_chrome_ts_1 = require("./effects/phone-chrome.js");
  * aionui columns, genui cards, captured errors) so a phone-side repro can be
  * diagnosed without guessing. No-op unless the query param is present.
  */
+/**
+ * Combo id segment identifying this plugin's own bundle inside the host's
+ * plugin route (`/plugins/??<id>/client.js,…&rev=<12 hex>`). The leading `?` or
+ * `,` is a boundary so a scoped fork (`@someone/dsh-web-mobile`) cannot match.
+ */
+const BUNDLE_ID = /[?,]dsh-web-mobile\/client\.js/;
+/**
+ * Revision from a plugin bundle URL, or null when it carries none.
+ * The host mints it per build (`dsh-client-modules` HASH_REVISION_LENGTH = 12)
+ * and stamps the same value on the URL it actually serves, so it answers
+ * "which build is this page running" with no build-time injection.
+ */
+function parseBundleRev(url) {
+    if (typeof url !== 'string' || url === '')
+        return null;
+    try {
+        const rev = new URL(url, 'http://x').searchParams.get('rev');
+        return rev === null || rev === '' ? null : rev;
+    }
+    catch {
+        return null;
+    }
+}
+/**
+ * Revision of the bundle the host served this plugin's code from, read off the
+ * head element the host injected for it, or null when that element is absent.
+ *
+ * The host injects an application-batch combo as
+ * `<link rel="preload" as="script" href="/plugins/??…,dsh-web-mobile/client.js,…&rev=…">`
+ * and the browser fetches exactly that URL (verified against
+ * `performance.getEntriesByType('resource')`), so the `rev` here IS the running
+ * build's revision. The bundle id — not "the first rev in head" — selects our
+ * row: the only `<script src>` row belongs to the client-modules bootstrap
+ * batch and carries a different, unrelated revision.
+ */
+function readBundleRev() {
+    for (const el of document.head.querySelectorAll('script[src], link[rel="preload"]')) {
+        const url = el.getAttribute('src') ?? el.getAttribute('href');
+        if (url !== null && BUNDLE_ID.test(url))
+            return parseBundleRev(url);
+    }
+    return null;
+}
 function installDebugBadge(ctx) {
     ctx.effect(() => {
         const params = new URLSearchParams(location.search);
@@ -12804,8 +13412,9 @@ function installDebugBadge(ctx) {
                 const b = el.getBoundingClientRect();
                 return `${el.getAttribute('data-sidebar-right-panel')} pad ${getComputedStyle(el).paddingTop} rect ${Math.round(b.top)},${Math.round(b.left)} ${Math.round(b.width)}x${Math.round(b.height)}`;
             };
+            const rev = readBundleRev();
             return [
-                `build 20260919 (diag chips)`,
+                `build rev ${rev ?? '?'} (diag chips)`,
                 `URL ${location.pathname}${location.search}`,
                 `W ${innerWidth} x ${innerHeight} dpr ${devicePixelRatio}`,
                 `mq≤1023 ${matchMedia(phone_chrome_ts_1.MOBILE_QUERY).matches}  mq≥1024 ${matchMedia(phone_chrome_ts_1.DESKTOP_QUERY).matches}`,
@@ -12873,61 +13482,6 @@ function installDebugBadge(ctx) {
         };
     }, 'dsh-web-mobile: debug badge');
 }
-};
-__modules["i18n/locales.js"] = function (require, module, exports) {
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.en = exports.zh = exports.NS = void 0;
-/** `mobileNav` namespace dictionaries: drawer controls. */
-exports.NS = 'mobileNav';
-/** Simplified Chinese dictionary (the key-set source of truth). */
-exports.zh = {
-    'open': '打开目录',
-    'close': '收起目录',
-    'backdrop': '点击关闭目录',
-    'backToConversation': '返回会话',
-    'sessionLog': '导出会话日志',
-    'files': '文件浏览',
-    'fileUpload': '添加文件',
-    'fileUploadImage': '上传图片',
-    'fileUploadAttachment': '上传附件',
-    'previewFullscreen': '全屏预览',
-    'previewExitFullscreen': '退出全屏',
-    'deleteSession': '删除会话',
-    'deleteConfirmTitle': '删除会话？',
-    'deleteConfirmDesc': '将删除「{title}」的完整会话记录，此操作不可恢复。',
-    'deleteConfirmYes': '删除',
-    'deleteConfirmNo': '取消',
-    'deletePending': '正在删除…',
-    'deleteErrorBusy': '该会话正在运行且无法停止，请稍后重试。',
-    'deleteErrorNotFound': '会话不存在或已被删除。',
-    'deleteErrorResolve': '无法确定要删除的会话，请重试。',
-    'deleteErrorGeneric': '删除失败：{message}',
-};
-/** English dictionary, key-identical to the Chinese source of truth. */
-exports.en = {
-    'open': 'Open directory',
-    'close': 'Close directory',
-    'backdrop': 'Click to close directory',
-    'backToConversation': 'Back to conversation',
-    'sessionLog': 'Session log',
-    'files': 'Files',
-    'fileUpload': 'Add files',
-    'fileUploadImage': 'Upload image',
-    'fileUploadAttachment': 'Upload attachment',
-    'previewFullscreen': 'Fullscreen preview',
-    'previewExitFullscreen': 'Exit fullscreen',
-    'deleteSession': 'Delete session',
-    'deleteConfirmTitle': 'Delete session?',
-    'deleteConfirmDesc': 'The complete log of “{title}” will be permanently removed. This cannot be undone.',
-    'deleteConfirmYes': 'Delete',
-    'deleteConfirmNo': 'Cancel',
-    'deletePending': 'Deleting…',
-    'deleteErrorBusy': 'This session is running and could not be stopped. Try again later.',
-    'deleteErrorNotFound': 'The session does not exist or was already deleted.',
-    'deleteErrorResolve': 'Could not identify the session to delete. Please try again.',
-    'deleteErrorGeneric': 'Delete failed: {message}',
-};
 };
 __modules["index.js"] = function (require, module, exports) {
 "use strict";
