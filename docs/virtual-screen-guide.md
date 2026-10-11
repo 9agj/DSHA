@@ -23,3 +23,5 @@
 - `{"ok":true,...,"runChangedAfterExecution": true}`：动作已落地，但本次 DSH 运行在动作期间被停止或撤销，后续操作需要重新授权。
 
 标记只会出现在动作自身成功（`ok:true`）的返回体上。动作自己判定失败时（例如 `STALE_FRAME`、`INPUT_REJECTED`）仍原样返回该错误，不追加标记。只读端点（读画面 / 控件树 / 预览）不注入任何动作，执行后校验失败时继续返回 `SCREEN_TARGET_CHANGED`。
+
+这套标记从桥协议 **4** 起提供（见 `/app/version` 的 `BRIDGE_PROTOCOL`）：按老约定把 `SCREEN_TARGET_CHANGED` 当成「没执行、可以直接重试」的插件，要先判断 `protocol >= 4`，否则会重复点击。

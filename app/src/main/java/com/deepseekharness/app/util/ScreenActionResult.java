@@ -3,7 +3,7 @@ package com.deepseekharness.app.util;
 /**
  * 虚拟屏写操作的响应契约：把「执行前被拒（动作没有落地）」与「执行后目标/运行状态已变（动作可能已经落地）」
  * 分开。后者不再复用 {@code SCREEN_TARGET_CHANGED} —— 它保留动作的真实结果、只追加标记，调用方仅凭响应就能
- * 判断是否可以重试，不必先 see 复核、也不必读日志。
+ * 判断动作是否已经落地（带标记的结果不得当成失败直接重试），不必靠日志或猜测。
  */
 public final class ScreenActionResult {
   /** 执行前拒绝：动作确定没有落地，保持历史错误码。 */
@@ -30,12 +30,12 @@ public final class ScreenActionResult {
    */
   public static String executed(String result, boolean targetChanged, boolean runChanged) {
     if (result == null || (!targetChanged && !runChanged)) return result;
-    int ok = topLevelValue(result, "ok");
+    int ok = topLevelValueStart(result, "ok");
     if (ok < 0 || !result.startsWith("true", ok)) return result;
     StringBuilder marks = new StringBuilder();
-    if (targetChanged && topLevelValue(result, TARGET_CHANGED_AFTER_EXECUTION) < 0)
+    if (targetChanged && topLevelValueStart(result, TARGET_CHANGED_AFTER_EXECUTION) < 0)
       marks.append(",\"").append(TARGET_CHANGED_AFTER_EXECUTION).append("\":true");
-    if (runChanged && topLevelValue(result, RUN_CHANGED_AFTER_EXECUTION) < 0)
+    if (runChanged && topLevelValueStart(result, RUN_CHANGED_AFTER_EXECUTION) < 0)
       marks.append(",\"").append(RUN_CHANGED_AFTER_EXECUTION).append("\":true");
     int end = topLevelEnd(result);
     if (marks.length() == 0 || end < 0) return result;
@@ -43,7 +43,7 @@ public final class ScreenActionResult {
   }
 
   /** 顶层对象里 {@code key} 对应值的起始下标；键不存在、不是单个对象或 JSON 未闭合时返回 -1。 */
-  private static int topLevelValue(String json, String key) {
+  private static int topLevelValueStart(String json, String key) {
     int depth = 0;
     int index = 0;
     while (index < json.length()) {

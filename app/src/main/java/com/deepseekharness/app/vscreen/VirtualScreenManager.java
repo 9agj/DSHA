@@ -211,22 +211,31 @@ public final class VirtualScreenManager {
       query += (query.isEmpty() ? "" : "&") + "expectedPackage=" + encode(snapshot.target);
     JSONObject value = requestAt(snapshot.identity.port, snapshot.identity.token, route, query);
     // Grant revision and target checks may use platform calls; keep them outside LOCK too.
-    if (!authorized(snapshot.authority)) {
-      // 请求已经发出：写操作可能已经落地，不能再报「未执行」（#140）。动作自己判定失败（ok=false）时
-      // 仍然按「未执行」返回 —— 那种情况下确实没有动作落地。
-      if (value.optBoolean("ok") && VirtualScreenRoutes.mutatesCore(route))
-        return markedAfterExecution(value);
-      return failure("SCREEN_TARGET_CHANGED");
-    }
+    if (!authorized(snapshot.authority))
+      return afterExecutionOrNotExecuted(
+          value,
+          VirtualScreenRoutes.mutatesCore(route),
+          ScreenActionResult.TARGET_CHANGED_AFTER_EXECUTION,
+          "SCREEN_TARGET_CHANGED");
     synchronized (LOCK) {
-      if (!currentLocked(snapshot)) return failure("VSCREEN_REVOKED");
+      if (!currentLocked(snapshot))
+        return afterExecutionOrNotExecuted(
+            value,
+            VirtualScreenRoutes.mutatesCore(route),
+            ScreenActionResult.RUN_CHANGED_AFTER_EXECUTION,
+            "VSCREEN_REVOKED");
       if (!value.optBoolean("ok")) {
         lastError = value.optString("error");
         return value;
       }
       String returned = value.optString("generation", generation);
       if (!generation.equals(returned)) {
-        if (!changeGeneration) return failure("STALE_GENERATION");
+        if (!changeGeneration)
+          return afterExecutionOrNotExecuted(
+              value,
+              VirtualScreenRoutes.mutatesCore(route),
+              ScreenActionResult.RUN_CHANGED_AFTER_EXECUTION,
+              "STALE_GENERATION");
         generation = returned;
         stateRevision++;
         frameSequence = -1;
@@ -262,12 +271,25 @@ public final class VirtualScreenManager {
   }
 
   /**
-   * 给「已经执行、但执行后目标/运行状态已变」的写操作结果补标记。写入失败也不改变动作的真实结果：
-   * 宁可少一个标记，也不能把已落地的动作说成「没执行」（#140）。
+   * 请求已经发出、之后才发现会话/目标/运行代次已变：写操作可能已经落地，保留真实结果并补标记；只读端点没有
+   * 动作可落地，动作自己判定失败（ok=false）也说明确实没执行 —— 这两种情况继续按原错误码返回（#140）。
    */
-  private static JSONObject markedAfterExecution(JSONObject value) {
+  private static JSONObject afterExecutionOrNotExecuted(
+      JSONObject value, boolean mutating, String marker, String notExecutedError) {
+    if (mutating && value.optBoolean("ok")) return markedAfterExecution(value, marker);
+    return failure(notExecutedError);
+  }
+
+  /**
+   * 给「已经执行、但执行后状态已变」的写操作结果补标记。{@code marker} 说明变了什么：目标窗口变了标
+   * {@code targetChangedAfterExecution}，会话被换或运行代次变了标 {@code runChangedAfterExecution}；
+   * 管理器层拿到的是桥层合成的授权判据、分不清两者时统一按目标变化标。调用方只需要知道动作已经落地、
+   * 不要照着失败直接重试。写入失败也不改变动作的真实结果：宁可少一个标记，也不能把已落地的动作说成
+   * 「没执行」（#140）。
+   */
+  private static JSONObject markedAfterExecution(JSONObject value, String marker) {
     try {
-      value.put(ScreenActionResult.TARGET_CHANGED_AFTER_EXECUTION, true);
+      value.put(marker, true);
     } catch (Exception ignored) {
     }
     return value;
@@ -502,9 +524,11 @@ public final class VirtualScreenManager {
                   accessibility, info.optInt("displayId", -1), operation, args);
           if (current(session)) return result;
           // edit/submit 可能已经写进去了：保留真实结果并标记，只有只读的 editor 仍报「未执行」（#140）。
-          if (result.optBoolean("ok") && VirtualScreenRoutes.mutates(operation))
-            return markedAfterExecution(result);
-          return failure("SCREEN_TARGET_CHANGED");
+          return afterExecutionOrNotExecuted(
+              result,
+              VirtualScreenRoutes.mutates(operation),
+              ScreenActionResult.TARGET_CHANGED_AFTER_EXECUTION,
+              "SCREEN_TARGET_CHANGED");
         });
   }
 
@@ -552,8 +576,11 @@ public final class VirtualScreenManager {
                     new JSONObject().put("nodeId", node).put("action", action).put("text", text));
             if (current(session)) return result;
             // 节点动作（点击/滚动/输入）可能已经生效：保留真实结果并标记（#140）。
-            if (result.optBoolean("ok")) return markedAfterExecution(result);
-            return failure("SCREEN_TARGET_CHANGED");
+            return afterExecutionOrNotExecuted(
+                result,
+                true,
+                ScreenActionResult.TARGET_CHANGED_AFTER_EXECUTION,
+                "SCREEN_TARGET_CHANGED");
           } catch (Exception invalid) {
             return failure("INVALID_NODE_ACTION");
           }
@@ -598,7 +625,8 @@ public final class VirtualScreenManager {
                   check.optInt("displayId", -1), text);
           if (current(session)) return result.equals("OK") ? check : failure(result);
           // 输入可能已经写进目标应用：保留真实结果并标记，只有输入本身失败时才按「未执行」返回（#140）。
-          if (result.equals("OK")) return markedAfterExecution(check);
+          if (result.equals("OK"))
+            return markedAfterExecution(check, ScreenActionResult.TARGET_CHANGED_AFTER_EXECUTION);
           return failure(result);
         });
   }

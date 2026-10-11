@@ -332,7 +332,7 @@ public class DshaAccessibilityService extends AccessibilityService {
     if (authority != null
         && (!authority.live.getAsBoolean() || !authority.target.matches(identity(display, root)))) {
       if (root != null) root.recycle();
-      throw new IllegalStateException("SCREEN_TARGET_CHANGED");
+      throw new TargetChangedException();
     }
     return root;
   }
@@ -340,13 +340,29 @@ public class DshaAccessibilityService extends AccessibilityService {
   private static void verifyActionTarget() {
     ActionAuthority authority = ACTION_AUTHORITY.get();
     if (authority != null && (!authority.live.getAsBoolean() || !matchesTarget(authority.target)))
-      throw new IllegalStateException("SCREEN_TARGET_CHANGED");
+      throw new TargetChangedException();
   }
 
   public static void validateActionRoot(int display, AccessibilityNodeInfo root) {
     ActionAuthority a = ACTION_AUTHORITY.get();
     if (a != null && (!a.live.getAsBoolean() || !a.target.matches(identity(display, root))))
-      throw new IllegalStateException("SCREEN_TARGET_CHANGED");
+      throw new TargetChangedException();
+  }
+
+  /**
+   * 动作被拒是因为「目标窗口或运行状态已经变了」，不是动作本身执行失败：抛出它的位置都在动作之前，
+   * 所以拿到它就意味着动作没有落地。
+   *
+   * <p>消息保持历史文本 {@code SCREEN_TARGET_CHANGED}（主屏路径按消息透出给调用方），但类型化之后虚拟屏
+   * 侧可以把这种「未执行」精确映射成同一个错误码，而不是笼统的
+   * {@code ACCESSIBILITY_OPERATION_UNKNOWN}（#140）。
+   */
+  public static final class TargetChangedException extends IllegalStateException {
+    private static final long serialVersionUID = 1L;
+
+    TargetChangedException() {
+      super("SCREEN_TARGET_CHANGED");
+    }
   }
 
   @Override
@@ -450,6 +466,9 @@ public class DshaAccessibilityService extends AccessibilityService {
       return target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
           ? "OK"
           : "VIRTUAL_INPUT_REJECTED";
+    } catch (TargetChangedException rejected) {
+      // 写入之前目标/运行状态就变了：没有输入落地，按「未执行」的稳定码返回（#140）。
+      return "SCREEN_TARGET_CHANGED";
     } catch (Throwable e) {
       return "VIRTUAL_INPUT_RESULT_UNKNOWN";
     } finally {
