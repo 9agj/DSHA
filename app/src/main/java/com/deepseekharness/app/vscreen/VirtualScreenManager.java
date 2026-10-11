@@ -6,8 +6,10 @@ import android.graphics.BitmapFactory;
 import com.deepseekharness.app.BuildConfig;
 import com.deepseekharness.app.DshaApp;
 import com.deepseekharness.app.util.OneShotLaunchAuthority;
+import com.deepseekharness.app.util.ScreenActionResult;
 import com.deepseekharness.app.util.ShellQuote;
 import com.deepseekharness.app.util.VirtualScreenRequestFence;
+import com.deepseekharness.app.util.VirtualScreenRoutes;
 import java.net.HttpURLConnection;
 import java.net.URLEncoder;
 import java.security.SecureRandom;
@@ -209,7 +211,13 @@ public final class VirtualScreenManager {
       query += (query.isEmpty() ? "" : "&") + "expectedPackage=" + encode(snapshot.target);
     JSONObject value = requestAt(snapshot.identity.port, snapshot.identity.token, route, query);
     // Grant revision and target checks may use platform calls; keep them outside LOCK too.
-    if (!authorized(snapshot.authority)) return failure("SCREEN_TARGET_CHANGED");
+    if (!authorized(snapshot.authority)) {
+      // 请求已经发出：写操作可能已经落地，不能再报「未执行」（#140）。动作自己判定失败（ok=false）时
+      // 仍然按「未执行」返回 —— 那种情况下确实没有动作落地。
+      if (value.optBoolean("ok") && VirtualScreenRoutes.mutatesCore(route))
+        return markedAfterExecution(value);
+      return failure("SCREEN_TARGET_CHANGED");
+    }
     synchronized (LOCK) {
       if (!currentLocked(snapshot)) return failure("VSCREEN_REVOKED");
       if (!value.optBoolean("ok")) {
@@ -251,6 +259,18 @@ public final class VirtualScreenManager {
   private JSONObject performRequired(String gen, String route, String query) {
     Snapshot session = snapshot(gen);
     return session == null ? missingSnapshot(gen) : perform(session, route, query, false);
+  }
+
+  /**
+   * 给「已经执行、但执行后目标/运行状态已变」的写操作结果补标记。写入失败也不改变动作的真实结果：
+   * 宁可少一个标记，也不能把已落地的动作说成「没执行」（#140）。
+   */
+  private static JSONObject markedAfterExecution(JSONObject value) {
+    try {
+      value.put(ScreenActionResult.TARGET_CHANGED_AFTER_EXECUTION, true);
+    } catch (Exception ignored) {
+    }
+    return value;
   }
 
   private void tagLocked(JSONObject value) {
@@ -480,7 +500,11 @@ public final class VirtualScreenManager {
           JSONObject result =
               com.deepseekharness.app.DshaAccessibilityService.virtualControl(
                   accessibility, info.optInt("displayId", -1), operation, args);
-          return current(session) ? result : failure("SCREEN_TARGET_CHANGED");
+          if (current(session)) return result;
+          // edit/submit 可能已经写进去了：保留真实结果并标记，只有只读的 editor 仍报「未执行」（#140）。
+          if (result.optBoolean("ok") && VirtualScreenRoutes.mutates(operation))
+            return markedAfterExecution(result);
+          return failure("SCREEN_TARGET_CHANGED");
         });
   }
 
@@ -526,7 +550,10 @@ public final class VirtualScreenManager {
                     check.optInt("displayId", -1),
                     "node",
                     new JSONObject().put("nodeId", node).put("action", action).put("text", text));
-            return current(session) ? result : failure("SCREEN_TARGET_CHANGED");
+            if (current(session)) return result;
+            // 节点动作（点击/滚动/输入）可能已经生效：保留真实结果并标记（#140）。
+            if (result.optBoolean("ok")) return markedAfterExecution(result);
+            return failure("SCREEN_TARGET_CHANGED");
           } catch (Exception invalid) {
             return failure("INVALID_NODE_ACTION");
           }
@@ -569,9 +596,10 @@ public final class VirtualScreenManager {
           String result =
               com.deepseekharness.app.DshaAccessibilityService.virtualInput(
                   check.optInt("displayId", -1), text);
-          return current(session)
-              ? result.equals("OK") ? check : failure(result)
-              : failure("SCREEN_TARGET_CHANGED");
+          if (current(session)) return result.equals("OK") ? check : failure(result);
+          // 输入可能已经写进目标应用：保留真实结果并标记，只有输入本身失败时才按「未执行」返回（#140）。
+          if (result.equals("OK")) return markedAfterExecution(check);
+          return failure(result);
         });
   }
 

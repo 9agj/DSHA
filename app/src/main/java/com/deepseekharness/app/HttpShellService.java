@@ -1189,15 +1189,18 @@ public final class HttpShellService {
       long generation = controller.getWebGeneration(), revision = uiGrant.revision();
       var status = com.deepseekharness.app.vscreen.VirtualScreenManager.from(ctx).status();
       int display = status.optInt("displayId", -1);
-      var target = display > 0 ? DshaAccessibilityService.observeTarget(display) : null;
+      var promptTarget = display > 0 ? DshaAccessibilityService.observeTarget(display) : null;
       String pkg =
           operation.equals("launch")
               ? getParam(query, "package", "")
-              : target != null
-                  ? target.packageName
+              : promptTarget != null
+                  ? promptTarget.packageName
                   : status.optBoolean("packageVerified") ? status.optString("package") : "";
       if (!uiAuthorized(com.deepseekharness.app.util.UiText.format("操作独立虚拟屏：%s", route), pkg))
         return "{\"ok\":false,\"error\":\"USER_REJECTED\"}";
+      // 目标身份必须在用户确认结束之后重新采集：确认期间界面可能已经变化，用确认前的旧快照去否决
+      // 一个已经执行完的动作，正是 #140 里「已执行却报失败」的来源。
+      var target = display > 0 ? DshaAccessibilityService.observeTarget(display) : null;
       java.util.function.BooleanSupplier live =
           () ->
               generation == controller.getWebGeneration()
@@ -1211,7 +1214,7 @@ public final class HttpShellService {
                 || target != null
                     && !operation.equals("launch")
                     && !DshaAccessibilityService.matchesTarget(target))
-              return "{\"ok\":false,\"error\":\"SCREEN_TARGET_CHANGED\"}";
+              return com.deepseekharness.app.util.ScreenActionResult.notExecuted();
             String result =
                 com.deepseekharness.app.vscreen.VirtualScreenManager.from(ctx)
                     .withBridgeTarget(
@@ -1224,11 +1227,18 @@ public final class HttpShellService {
                         () ->
                             com.deepseekharness.app.vscreen.VirtualScreenManager.from(ctx)
                                 .bridge(request));
-            if (!live.getAsBoolean()
-                || target != null
+            // 执行后校验失败不等于「没执行」：写操作可能已经落地（#140）。写操作保留真实结果并追加标记，
+            // 只读操作没有动作可落地，继续按「未执行」返回。
+            boolean targetChanged =
+                target != null
                     && !operation.equals("launch")
-                    && !DshaAccessibilityService.matchesTarget(target))
-              return "{\"ok\":false,\"error\":\"SCREEN_TARGET_CHANGED\"}";
+                    && !DshaAccessibilityService.matchesTarget(target);
+            boolean runChanged = !live.getAsBoolean();
+            if (targetChanged || runChanged)
+              return com.deepseekharness.app.util.VirtualScreenRoutes.mutates(operation)
+                  ? com.deepseekharness.app.util.ScreenActionResult.executed(
+                      result, targetChanged, runChanged)
+                  : com.deepseekharness.app.util.ScreenActionResult.notExecuted();
             return result;
           };
       return target != null && !operation.equals("launch")
