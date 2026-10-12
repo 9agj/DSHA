@@ -1,5 +1,6 @@
 package com.deepseekharness.app;
 
+import com.deepseekharness.app.util.ScreenActionResult;
 import com.deepseekharness.app.util.SensitiveData;
 
 import android.accessibilityservice.AccessibilityService;
@@ -499,6 +500,8 @@ public class DshaAccessibilityService extends AccessibilityService {
       }
       if (n[0] == 0) sb.append("（没有可读节点）\n");
       return sb.toString();
+    } catch (TargetChangedException rejected) {
+      return ScreenActionResult.NOT_EXECUTED_REPLY;
     } catch (Throwable t) {
       return com.deepseekharness.app.util.UiText.format(
           "[ERR] 读屏失败：%s", SensitiveData.redact(String.valueOf(t)));
@@ -598,6 +601,8 @@ public class DshaAccessibilityService extends AccessibilityService {
       return ok
           ? com.deepseekharness.app.util.UiText.format("OK 已点击「%s」", text)
           : com.deepseekharness.app.util.UiText.text("[ERR] 点击被系统拒绝（控件可能不可用）");
+    } catch (TargetChangedException rejected) {
+      return ScreenActionResult.NOT_EXECUTED_REPLY;
     } catch (Throwable t) {
       return com.deepseekharness.app.util.UiText.format(
           "[ERR] 点击失败：%s", SensitiveData.redact(String.valueOf(t)));
@@ -670,6 +675,8 @@ public class DshaAccessibilityService extends AccessibilityService {
       return ok
           ? com.deepseekharness.app.util.UiText.format("OK 已输入 %s 个字符", text.length())
           : com.deepseekharness.app.util.UiText.text("[ERR] 输入被系统拒绝");
+    } catch (TargetChangedException rejected) {
+      return ScreenActionResult.NOT_EXECUTED_REPLY;
     } catch (Throwable t) {
       return com.deepseekharness.app.util.UiText.format(
           "[ERR] 输入失败：%s", SensitiveData.redact(String.valueOf(t)));
@@ -739,6 +746,8 @@ public class DshaAccessibilityService extends AccessibilityService {
       return s.performGlobalAction(action)
           ? com.deepseekharness.app.util.UiText.format("OK 已发送 %s", k)
           : com.deepseekharness.app.util.UiText.format("[ERR] 系统拒绝了 %s", k);
+    } catch (TargetChangedException rejected) {
+      return ScreenActionResult.NOT_EXECUTED_REPLY;
     } catch (Throwable t) {
       return com.deepseekharness.app.util.UiText.format(
           "[ERR] 按键失败：%s", SensitiveData.redact(String.valueOf(t)));
@@ -802,6 +811,8 @@ public class DshaAccessibilityService extends AccessibilityService {
       return ok[0]
           ? com.deepseekharness.app.util.UiText.format("OK 已%s", what)
           : com.deepseekharness.app.util.UiText.format("[ERR] 手势被取消（%s，可能被其它手势打断）", what);
+    } catch (TargetChangedException rejected) {
+      return ScreenActionResult.NOT_EXECUTED_REPLY;
     } catch (Throwable t) {
       return com.deepseekharness.app.util.UiText.format(
           "[ERR] 手势失败：%s", SensitiveData.redact(String.valueOf(t)));

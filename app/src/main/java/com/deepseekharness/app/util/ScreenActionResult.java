@@ -9,6 +9,13 @@ public final class ScreenActionResult {
   /** 执行前拒绝：动作确定没有落地，保持历史错误码。 */
   public static final String NOT_EXECUTED_ERROR = "SCREEN_TARGET_CHANGED";
 
+  /**
+   * 主屏无障碍路径（读屏 / 点击 / 输入 / 按键 / 手势）遇到「目标窗口或运行状态已经变了」时的稳定回复。抛出点都在动作
+   * 之前，因此这个码只代表「没有执行、可以直接重试」；它与 {@code /app/vscreen/*} 共用同一个字面量，但不把 Java
+   * 异常类名当用户可见文本透出（#145 评审）。
+   */
+  public static final String NOT_EXECUTED_REPLY = "[ERR] " + NOT_EXECUTED_ERROR;
+
   /** 动作已执行，但执行后目标身份（窗口）已变。 */
   public static final String TARGET_CHANGED_AFTER_EXECUTION = "targetChangedAfterExecution";
 

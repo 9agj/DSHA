@@ -96,4 +96,14 @@ public class ScreenActionResultTest {
         "{ \"ok\" : true , \"frameSeq\" : 3 ,\"targetChangedAfterExecution\":true}",
         ScreenActionResult.executed("{ \"ok\" : true , \"frameSeq\" : 3 }", true, false));
   }
+
+  @Test
+  public void notExecutedReplyIsTheStableCodeWithoutAnyExceptionClassName() {
+    // 主屏无障碍路径把它当用户可见文本回给调用方：只能是稳定码，不能是 Java 异常类名（#145 评审 Q3）。
+    assertEquals(
+        "[ERR] " + ScreenActionResult.NOT_EXECUTED_ERROR, ScreenActionResult.NOT_EXECUTED_REPLY);
+    assertEquals("[ERR] SCREEN_TARGET_CHANGED", ScreenActionResult.NOT_EXECUTED_REPLY);
+    assertFalse(ScreenActionResult.NOT_EXECUTED_REPLY.contains("Exception"));
+    assertFalse(ScreenActionResult.NOT_EXECUTED_REPLY.contains("."));
+  }
 }
